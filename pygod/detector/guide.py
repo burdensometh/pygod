@@ -184,7 +184,7 @@ class GUIDE(DeepDetector):
                          act=self.act,
                          **kwargs).to(self.device)
 
-    def forward_model(self, data):
+    def forward_model(self, data, batch_mask=None):
 
         batch_size = data.batch_size
 
@@ -200,6 +200,9 @@ class GUIDE(DeepDetector):
                                      s_[:batch_size],
                                      self.alpha)
 
-        loss = torch.mean(score)
+        if batch_mask is not None:
+            loss = self._masked_mean(score, batch_mask)
+        else:
+            loss = torch.mean(score)
 
         return loss, score.detach().cpu()

@@ -83,10 +83,25 @@ class SCAN(Detector):
         self.hub_score_ = None
         self.scatter_score_ = None
 
+    # SCAN performs structural clustering whose cluster expansion
+    # traverses the whole graph and has no per-node loss that could be
+    # restricted to a seed population, so an explicit training seed
+    # mask cannot be honored. Non-default masks are rejected
+    # explicitly instead of silently fitting on every node.
+    _supports_train_mask = False
+
     def process_graph(self, data):
         pass
 
-    def fit(self, data, label=None):
+    def fit(self, data, label=None, train_mask=None):
+        train_mask = self._validate_train_mask(train_mask,
+                                               data.x.shape[0])
+        if not torch.all(train_mask):
+            raise NotImplementedError(
+                "SCAN does not support an explicit training seed mask: "
+                "its structural clustering is defined over the whole "
+                "graph and has no per-node loss to restrict to a seed "
+                "population.")
 
         c = 0
         self.edge_index = data.edge_index
@@ -157,9 +172,9 @@ class SCAN(Detector):
         neighbors = self._neighbors(v)
         return len(torch.unique(neighbors)) > 1
 
-    def decision_function(self, data, label=None):
+    def decision_function(self, data, label=None, train_mask=None):
         if data is not None:
             warnings.warn("This detector is transductive only. "
                           "Training from scratch with the input data.")
-            self.fit(data, label)
+            self.fit(data, label, train_mask)
         return self.decision_score_

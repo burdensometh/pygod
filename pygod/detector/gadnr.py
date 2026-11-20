@@ -181,6 +181,15 @@ class GADNR(DeepDetector):
         self.tot_nodes = 0
         self.verbose = verbose
 
+    # GAD-NR precomputes global neighborhood distributions and
+    # per-node degree statistics over the whole graph in
+    # ``process_graph`` and fits those global reconstruction targets,
+    # so its fitting contract cannot be restricted to a subset of
+    # training seed nodes. Non-default masks are rejected explicitly
+    # instead of silently letting non-seed nodes enter the loss and
+    # the threshold fitting.
+    _supports_train_mask = False
+
     def process_graph(self, data):
         if self.batch_size != data.x.shape[0]: # mini-batch
             data, neighbor_dict, neighbor_num_list, id_mapping = \
@@ -268,13 +277,14 @@ class GADNR(DeepDetector):
     def fit(self,
             data,
             label=None,
+            train_mask=None,
             h_loss_weight=1.0,
             degree_loss_weight=0.,
             feature_loss_weight=2.5,
             loss_step=20
             ):
         """
-        Overwrite the base model fit function since GAD-NR uses 
+        Overwrite the base model fit function since GAD-NR uses
         multiple personalized loss functions.
 
         Parameters
@@ -284,18 +294,33 @@ class GADNR(DeepDetector):
         label : torch.Tensor, optional
             The optional outlier ground truth labels used for testing.
             Default: ``None``.
+        train_mask : torch.Tensor, optional
+            Training seed mask. GAD-NR does not support a partial
+            training seed mask (``_supports_train_mask`` is False):
+            ``None`` or an all-True mask fit on every node as usual,
+            while any mask that excludes at least one node raises
+            ``NotImplementedError``. An empty mask raises
+            ``ValueError``.
         h_loss_weight : float, optional
-            The weight of the neighborhood reconstruction loss term used in 
+            The weight of the neighborhood reconstruction loss term used in
             the weighted decision score. Default: ``1.0``.
         degree_loss_weight : float, optional
-            The weight of the node degree reconstruction loss term used in 
+            The weight of the node degree reconstruction loss term used in
             the weighted decision score. Default: ``0.``.
         feature_loss_weight : float, optional
-            The weight of the node feature reconstruction loss term used in 
+            The weight of the node feature reconstruction loss term used in
             the weighted decision score. Default: ``2.5``.
         loss_step : int, optional
             The epoch interval to update the loss terms. Default: ``20``.
         """
+        train_mask = self._validate_train_mask(train_mask,
+                                               data.x.shape[0])
+        if not torch.all(train_mask):
+            raise NotImplementedError(
+                "GADNR does not support an explicit training seed mask: "
+                "its global neighborhood and degree statistics are "
+                "precomputed over every node in process_graph and enter "
+                "the reconstruction loss for the whole population.")
 
         self.num_nodes, self.in_dim = data.x.shape
         if self.batch_size == 0: # full batch training

@@ -167,7 +167,7 @@ class AnomalyDAE(DeepDetector):
                               act=self.act,
                               **kwargs).to(self.device)
 
-    def forward_model(self, data):
+    def forward_model(self, data, batch_mask=None):
         batch_size = data.batch_size
         node_idx = data.n_id
 
@@ -190,6 +190,9 @@ class AnomalyDAE(DeepDetector):
                                      pos_weight_a,
                                      pos_weight_s)
 
-        loss = torch.mean(score)
+        if batch_mask is not None:
+            loss = self._masked_mean(score, batch_mask)
+        else:
+            loss = torch.mean(score)
 
         return loss, score.detach().cpu()

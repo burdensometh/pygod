@@ -190,7 +190,7 @@ class AdONE(DeepDetector):
                          w5=self.w5,
                          **kwargs).to(self.device)
 
-    def forward_model(self, data):
+    def forward_model(self, data, batch_mask=None):
         batch_size = data.batch_size
         node_idx = data.n_id
 
@@ -201,13 +201,16 @@ class AdONE(DeepDetector):
         x_, s_, h_a, h_s, dna, dns = self.model(x, s, edge_index)
 
         loss_d = self.model.loss_func_d(h_a[:batch_size].detach(),
-                                        h_s[:batch_size].detach())
+                                        h_s[:batch_size].detach(),
+                                        batch_mask=batch_mask)
 
         self.opt_in.zero_grad()
         loss_d.backward()
         self.opt_in.step()
 
-        self.epoch_loss_in += loss_d.item() * batch_size
+        seed_count = batch_size if batch_mask is None \
+            else int(batch_mask.sum())
+        self.epoch_loss_in += loss_d.item() * seed_count
 
         loss_g, oa, os, oc = self.model.loss_func_g(x[:batch_size],
                                                     x_[:batch_size],
@@ -216,17 +219,26 @@ class AdONE(DeepDetector):
                                                     h_a[:batch_size],
                                                     h_s[:batch_size],
                                                     dna[:batch_size],
-                                                    dns[:batch_size])
+                                                    dns[:batch_size],
+                                                    batch_mask=batch_mask)
 
-        self.attribute_score_[node_idx[:batch_size]] = oa.detach().cpu()
-        self.structural_score_[node_idx[:batch_size]] = os.detach().cpu()
-        self.combined_score_[node_idx[:batch_size]] = oc.detach().cpu()
+        target_idx = node_idx[:batch_size]
+        score_mask = slice(None)
+        if batch_mask is not None:
+            target_idx = target_idx[batch_mask]
+            score_mask = batch_mask
+        self.attribute_score_[target_idx] = \
+            oa.detach().cpu()[score_mask]
+        self.structural_score_[target_idx] = \
+            os.detach().cpu()[score_mask]
+        self.combined_score_[target_idx] = \
+            oc.detach().cpu()[score_mask]
 
         return loss_g, ((oa + os + oc) / 3).detach().cpu()
 
-    def decision_function(self, data, label=None):
+    def decision_function(self, data, label=None, train_mask=None):
         if data is not None:
             warnings.warn("This detector is transductive only. "
                           "Training from scratch with the input data.")
-            self.fit(data, label)
+            self.fit(data, label, train_mask)
         return self.decision_score_

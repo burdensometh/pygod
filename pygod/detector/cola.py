@@ -137,20 +137,27 @@ class CoLA(DeepDetector):
                         backbone=self.backbone,
                         **kwargs).to(self.device)
 
-    def forward_model(self, data):
+    def forward_model(self, data, batch_mask=None):
         batch_size = data.batch_size
 
         x = data.x.to(self.device)
         edge_index = data.edge_index.to(self.device)
 
         pos_logits, neg_logits = self.model(x, edge_index)
-        logits = torch.cat([pos_logits[:batch_size],
-                            neg_logits[:batch_size]])
+        pos_target = pos_logits[:batch_size]
+        neg_target = neg_logits[:batch_size]
+        logits = torch.cat([pos_target, neg_target])
         con_label = torch.cat([torch.ones(batch_size),
                                torch.zeros(batch_size)]).to(self.device)
 
-        loss = self.model.loss_func(logits, con_label)
+        if batch_mask is not None:
+            # keep only the contrastive pairs of training seed nodes
+            pair_mask = torch.cat([batch_mask, batch_mask])
+            loss = self.model.loss_func(logits[pair_mask],
+                                        con_label[pair_mask])
+        else:
+            loss = self.model.loss_func(logits, con_label)
 
-        score = neg_logits[:batch_size] - pos_logits[:batch_size]
+        score = neg_target - pos_target
 
         return loss, score.detach().cpu()

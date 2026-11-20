@@ -132,7 +132,8 @@ class AdONEBase(torch.nn.Module):
 
         return x_, s_, h_a, h_s, dna, dns
 
-    def loss_func_g(self, x, x_, s, s_, h_a, h_s, dna, dns):
+    def loss_func_g(self, x, x_, s, s_, h_a, h_s, dna, dns,
+                    batch_mask=None):
         """
         Generator loss function for AdONE.
 
@@ -154,6 +155,11 @@ class AdONEBase(torch.nn.Module):
             Attribute neighbor distance.
         dns : torch.Tensor
             Structure neighbor distance.
+        batch_mask : torch.Tensor, optional
+            Boolean mask over the batch target nodes restricting the
+            score normalization and every loss term to the training
+            seed nodes. The returned per-node scores still cover the
+            full batch. ``None`` means all target nodes contribute.
 
         Returns
         -------
@@ -166,39 +172,46 @@ class AdONEBase(torch.nn.Module):
         oc : torch.Tensor
             Combined outlier scores.
         """
+        if batch_mask is None:
+            batch_mask = torch.ones(x.shape[0], dtype=torch.bool)
         # equation 9 is based on the official implementation, and it
         # is slightly different from the paper
         dx = torch.sum(torch.pow(x - x_, 2), 1)
         tmp = self.w3 * dx + self.w4 * dna
-        oa = tmp / torch.sum(tmp)
+        oa = tmp / torch.sum(tmp[batch_mask])
 
         # equation 8 is based on the official implementation, and it
         # is slightly different from the paper
         ds = torch.sum(torch.pow(s - s_, 2), 1)
         tmp = self.w1 * ds + self.w2 * dns
-        os = tmp / torch.sum(tmp)
+        os = tmp / torch.sum(tmp[batch_mask])
 
         # equation 10
         dc = torch.sum(torch.pow(h_a - h_s, 2), 1)
-        oc = dc / torch.sum(dc)
+        oc = dc / torch.sum(dc[batch_mask])
 
         # equation 4
-        loss_prox_a = torch.mean(torch.log(torch.pow(oa, -1)) * dx)
+        loss_prox_a = torch.mean(
+            (torch.log(torch.pow(oa, -1)) * dx)[batch_mask])
 
         # equation 5
-        loss_hom_a = torch.mean(torch.log(torch.pow(oa, -1)) * dna)
+        loss_hom_a = torch.mean(
+            (torch.log(torch.pow(oa, -1)) * dna)[batch_mask])
 
         # equation 2
-        loss_prox_s = torch.mean(torch.log(torch.pow(os, -1)) * ds)
+        loss_prox_s = torch.mean(
+            (torch.log(torch.pow(os, -1)) * ds)[batch_mask])
 
         # equation 3
-        loss_hom_s = torch.mean(torch.log(torch.pow(os, -1)) * dns)
+        loss_hom_s = torch.mean(
+            (torch.log(torch.pow(os, -1)) * dns)[batch_mask])
 
         dis_a = torch.sigmoid(self.discriminator(h_a))
         dis_s = torch.sigmoid(self.discriminator(h_s))
         # equation 12
-        loss_alg = torch.mean(torch.log(torch.pow(oc, -1))
-                              * (torch.log(1 - dis_a) + torch.log(dis_s)))
+        loss_alg = torch.mean(
+            (torch.log(torch.pow(oc, -1))
+             * (torch.log(1 - dis_a) + torch.log(dis_s)))[batch_mask])
 
         # equation 13
         loss = self.w3 * loss_prox_a + \
@@ -209,7 +222,7 @@ class AdONEBase(torch.nn.Module):
 
         return loss, oa, os, oc
 
-    def loss_func_d(self, h_a, h_s):
+    def loss_func_d(self, h_a, h_s, batch_mask=None):
         """
         Discriminator loss function for AdONE.
 
@@ -219,6 +232,10 @@ class AdONEBase(torch.nn.Module):
             Attribute hidden embeddings.
         h_s : torch.Tensor
             Structure hidden embeddings.
+        batch_mask : torch.Tensor, optional
+            Boolean mask over the batch target nodes restricting the
+            discriminator loss to the training seed nodes. ``None``
+            means all target nodes contribute.
 
         Returns
         -------
@@ -228,7 +245,10 @@ class AdONEBase(torch.nn.Module):
         # equation 11
         dis_a = torch.sigmoid(self.discriminator(h_a))
         dis_s = torch.sigmoid(self.discriminator(h_s))
-        loss = - torch.mean(torch.log(1 - dis_a) + torch.log(dis_s))
+        per_node = torch.log(1 - dis_a) + torch.log(dis_s)
+        if batch_mask is not None:
+            per_node = per_node[batch_mask]
+        loss = - torch.mean(per_node)
         return loss
 
     @staticmethod

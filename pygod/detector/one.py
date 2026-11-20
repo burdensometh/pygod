@@ -85,11 +85,14 @@ class ONE(Detector):
 
         self.model = None
 
-    def fit(self, data, label=None):
+    def fit(self, data, label=None, train_mask=None):
 
         self.process_graph(data)
 
         num_nodes, in_dim = data.x.shape
+        train_mask = self._validate_train_mask(train_mask, num_nodes)
+        self.train_mask_ = None if torch.all(train_mask) else train_mask
+
         x = data.x
         s = data.s
 
@@ -113,12 +116,14 @@ class ONE(Detector):
                                                     x_,
                                                     s,
                                                     s_,
-                                                    diff)
+                                                    diff,
+                                                    train_mask)
 
-            self.attribute_score_ = o1.detach().cpu()
-            self.structural_score_ = o2.detach().cpu()
-            self.combined_score_ = o3.detach().cpu()
-            self.decision_score_ = ((o1 + o2 + o3) / 3).detach().cpu()
+            self.attribute_score_ = o1[train_mask].detach().cpu()
+            self.structural_score_ = o2[train_mask].detach().cpu()
+            self.combined_score_ = o3[train_mask].detach().cpu()
+            self.decision_score_ = ((o1 + o2 + o3) / 3)[
+                train_mask].detach().cpu()
 
             optimizer.zero_grad()
             loss.backward()
@@ -127,7 +132,7 @@ class ONE(Detector):
             logger(epoch=epoch,
                    loss=loss.item(),
                    score=self.decision_score_,
-                   target=label,
+                   target=None if label is None else label[train_mask],
                    time=time.time() - start_time,
                    verbose=self.verbose,
                    train=True)
@@ -135,11 +140,11 @@ class ONE(Detector):
         self._process_decision_score()
         return self
 
-    def decision_function(self, data, label=None):
+    def decision_function(self, data, label=None, train_mask=None):
         if data is not None:
             warnings.warn("This detector is transductive only. "
                           "Training from scratch with the input data.")
-            self.fit(data, label)
+            self.fit(data, label, train_mask)
         return self.decision_score_
 
     def process_graph(self, data):
@@ -168,18 +173,23 @@ class ONEBase(torch.nn.Module):
         diff = self.g - self.u @ self.w
         return x_, s_, diff
 
-    def loss_func(self, x, x_, s, s_, diff):
+    def loss_func(self, x, x_, s, s_, diff, train_mask=None):
+        if train_mask is None:
+            train_mask = torch.ones(x.shape[0], dtype=torch.bool)
         dx = torch.sum(torch.pow(x - x_, 2), 1)
-        o1 = dx / torch.sum(dx)
-        loss_a = torch.mean(torch.log(torch.pow(o1, -1)) * dx)
+        o1 = dx / torch.sum(dx[train_mask])
+        loss_a = torch.mean(
+            (torch.log(torch.pow(o1, -1)) * dx)[train_mask])
 
         ds = torch.sum(torch.pow(s - s_, 2), 1)
-        o2 = ds / torch.sum(ds)
-        loss_s = torch.mean(torch.log(torch.pow(o2, -1)) * ds)
+        o2 = ds / torch.sum(ds[train_mask])
+        loss_s = torch.mean(
+            (torch.log(torch.pow(o2, -1)) * ds)[train_mask])
 
         dc = torch.sum(torch.pow(diff, 2), 1)
-        o3 = dc / torch.sum(dc)
-        loss_c = torch.mean(torch.log(torch.pow(o3, -1)) * dc)
+        o3 = dc / torch.sum(dc[train_mask])
+        loss_c = torch.mean(
+            (torch.log(torch.pow(o3, -1)) * dc)[train_mask])
 
         loss = self.alpha * loss_a + self.beta * loss_s + self.gamma * loss_c
 

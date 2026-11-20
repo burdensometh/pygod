@@ -169,7 +169,7 @@ class DMGD(DeepDetector):
                         k=self.k,
                         **kwargs).to(self.device)
 
-    def forward_model(self, data):
+    def forward_model(self, data, batch_mask=None):
         batch_size = data.batch_size
 
         x = data.x.to(self.device)
@@ -179,13 +179,14 @@ class DMGD(DeepDetector):
         loss, score = self.model.loss_func(x[:batch_size],
                                            x_[:batch_size],
                                            nd[:batch_size],
-                                           emb[:batch_size])
+                                           emb[:batch_size],
+                                           batch_mask=batch_mask)
 
         return loss, score.detach().cpu()
 
-    def decision_function(self, data, label=None):
+    def decision_function(self, data, label=None, train_mask=None):
         if data is not None:
             warnings.warn("This detector is transductive only. "
                           "Training from scratch with the input data.")
-            self.fit(data, label)
+            self.fit(data, label, train_mask)
         return self.decision_score_

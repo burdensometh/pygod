@@ -167,7 +167,7 @@ class CARD(DeepDetector):
                         backbone=self.backbone,
                         **kwargs).to(self.device)
 
-    def forward_model(self, data):
+    def forward_model(self, data, batch_mask=None):
         batch_size = data.batch_size
 
         data.x = data.x.to(self.device)
@@ -186,6 +186,7 @@ class CARD(DeepDetector):
                                torch.zeros(batch_size)]).to(self.device)
 
         loss, score = self.model.loss_func(
-            logits, diff_logits, x_, local_x_, data.x, con_label)
+            logits, diff_logits, x_, local_x_, data.x, con_label,
+            batch_mask=batch_mask)
 
         return loss, score.detach().cpu()

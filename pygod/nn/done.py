@@ -153,7 +153,8 @@ class DONEBase(nn.Module):
 
         return x_, s_, h_a, h_s, dna, dns
 
-    def loss_func(self, x, x_, s, s_, h_a, h_s, dna, dns):
+    def loss_func(self, x, x_, s, s_, h_a, h_s, dna, dns,
+                  batch_mask=None):
         """
         Loss function for DONE.
 
@@ -175,6 +176,11 @@ class DONEBase(nn.Module):
             Attribute neighbor distance.
         dns : torch.Tensor
             Structure neighbor distance.
+        batch_mask : torch.Tensor, optional
+            Boolean mask over the batch target nodes restricting the
+            score normalization and every loss term to the training
+            seed nodes. The returned per-node scores still cover the
+            full batch. ``None`` means all target nodes contribute.
 
         Returns
         -------
@@ -187,36 +193,43 @@ class DONEBase(nn.Module):
         oc : torch.Tensor
             Combined outlier scores.
         """
+        if batch_mask is None:
+            batch_mask = torch.ones(x.shape[0], dtype=torch.bool)
         # equation 9 is based on the official implementation, and it
         # is slightly different from the paper
         dx = torch.sum(torch.pow(x - x_, 2), 1)
         tmp = self.w3 * dx + self.w4 * dna
-        oa = tmp / torch.sum(tmp)
+        oa = tmp / torch.sum(tmp[batch_mask])
 
         # equation 8 is based on the official implementation, and it
         # is slightly different from the paper
         ds = torch.sum(torch.pow(s - s_, 2), 1)
         tmp = self.w1 * ds + self.w2 * dns
-        os = tmp / torch.sum(tmp)
+        os = tmp / torch.sum(tmp[batch_mask])
 
         # equation 10
         dc = torch.sum(torch.pow(h_a - h_s, 2), 1)
-        oc = dc / torch.sum(dc)
+        oc = dc / torch.sum(dc[batch_mask])
 
         # equation 4
-        loss_prox_a = torch.mean(torch.log(torch.pow(oa, -1)) * dx)
+        loss_prox_a = torch.mean(
+            (torch.log(torch.pow(oa, -1)) * dx)[batch_mask])
 
         # equation 5
-        loss_hom_a = torch.mean(torch.log(torch.pow(oa, -1)) * dna)
+        loss_hom_a = torch.mean(
+            (torch.log(torch.pow(oa, -1)) * dna)[batch_mask])
 
         # equation 2
-        loss_prox_s = torch.mean(torch.log(torch.pow(os, -1)) * ds)
+        loss_prox_s = torch.mean(
+            (torch.log(torch.pow(os, -1)) * ds)[batch_mask])
 
         # equation 3
-        loss_hom_s = torch.mean(torch.log(torch.pow(os, -1)) * dns)
+        loss_hom_s = torch.mean(
+            (torch.log(torch.pow(os, -1)) * dns)[batch_mask])
 
         # equation 6
-        loss_c = torch.mean(torch.log(torch.pow(oc, -1)) * dc)
+        loss_c = torch.mean(
+            (torch.log(torch.pow(oc, -1)) * dc)[batch_mask])
 
         # equation 7
         loss = self.w3 * loss_prox_a + \

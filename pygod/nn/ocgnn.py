@@ -92,7 +92,7 @@ class OCGNNBase(nn.Module):
         self.emb = self.gnn(x, edge_index)
         return self.emb
 
-    def loss_func(self, emb):
+    def loss_func(self, emb, batch_mask=None):
         """
         Loss function for OCGNN
 
@@ -100,6 +100,10 @@ class OCGNNBase(nn.Module):
         ----------
         emb : torch.Tensor
             Embeddings.
+        batch_mask : torch.Tensor, optional
+            Boolean mask over the batch target nodes restricting the
+            hinge term to the training seed nodes. ``None`` means all
+            target nodes contribute.
 
         Returns
         -------
@@ -117,7 +121,10 @@ class OCGNNBase(nn.Module):
 
         dist = torch.sum(torch.pow(emb - self.c, 2), 1)
         score = dist - self.r ** 2
-        loss = self.r ** 2 + 1 / self.beta * torch.mean(torch.relu(score))
+        hinge = torch.relu(score)
+        if batch_mask is not None:
+            hinge = hinge[batch_mask]
+        loss = self.r ** 2 + 1 / self.beta * torch.mean(hinge)
 
         if self.warmup > 0:
             with torch.no_grad():

@@ -188,7 +188,7 @@ class DONE(DeepDetector):
                         w5=self.w5,
                         **kwargs).to(self.device)
 
-    def forward_model(self, data):
+    def forward_model(self, data, batch_mask=None):
         batch_size = data.batch_size
         node_idx = data.n_id
 
@@ -204,17 +204,24 @@ class DONE(DeepDetector):
                                                 h_a[:batch_size],
                                                 h_s[:batch_size],
                                                 dna[:batch_size],
-                                                dns[:batch_size])
+                                                dns[:batch_size],
+                                                batch_mask=batch_mask)
 
-        self.attribute_score_[node_idx[:batch_size]] = oa.detach().cpu()
-        self.structural_score_[node_idx[:batch_size]] = os.detach().cpu()
-        self.combined_score_[node_idx[:batch_size]] = oc.detach().cpu()
+        target_idx = node_idx[:batch_size]
+        if batch_mask is not None:
+            target_idx = target_idx[batch_mask]
+        self.attribute_score_[target_idx] = oa.detach().cpu()[
+            batch_mask if batch_mask is not None else slice(None)]
+        self.structural_score_[target_idx] = os.detach().cpu()[
+            batch_mask if batch_mask is not None else slice(None)]
+        self.combined_score_[target_idx] = oc.detach().cpu()[
+            batch_mask if batch_mask is not None else slice(None)]
 
         return loss, ((oa + os + oc) / 3).detach().cpu()
 
-    def decision_function(self, data, label=None):
+    def decision_function(self, data, label=None, train_mask=None):
         if data is not None:
             warnings.warn("This detector is transductive only. "
                           "Training from scratch with the input data.")
-            self.fit(data, label)
+            self.fit(data, label, train_mask)
         return self.decision_score_

@@ -194,7 +194,8 @@ def logger(epoch=0,
            time=None,
            verbose=0,
            train=True,
-           deep=True):
+           deep=True,
+           mask=None):
     """
     Logger for detector.
 
@@ -217,6 +218,13 @@ def logger(epoch=0,
         Whether the logger is used for training.
     deep : bool, optional
         Whether the logger is used for deep detector.
+    mask : torch.Tensor, optional
+        Boolean mask of the same shape as ``score`` and ``target``
+        restricting every evaluation metric to the eligible
+        population. When provided, non-masked nodes are excluded from
+        the reported AUC, recall, precision, AP and F1, so that the
+        logging statistics use the same population as the loss and the
+        threshold fitting. Default: ``None``.
     """
     if verbose > 0:
         if deep:
@@ -233,21 +241,28 @@ def logger(epoch=0,
 
         if verbose > 1:
             if target is not None:
-                auc = eval_roc_auc(target, score)
+                if mask is not None:
+                    log_score = score[mask]
+                    log_target = target[mask]
+                else:
+                    log_score = score
+                    log_target = target
+                auc = eval_roc_auc(log_target, log_score)
                 print("AUC {:.4f}".format(auc), end='')
 
             if verbose > 2:
                 if target is not None:
-                    pos_size = target.nonzero().size(0)
-                    rec = eval_recall_at_k(target, score, pos_size)
-                    pre = eval_precision_at_k(target, score, pos_size)
-                    ap = eval_average_precision(target, score)
+                    pos_size = log_target.nonzero().size(0)
+                    rec = eval_recall_at_k(log_target, log_score, pos_size)
+                    pre = eval_precision_at_k(log_target, log_score,
+                                              pos_size)
+                    ap = eval_average_precision(log_target, log_score)
 
-                    contamination = sum(target) / len(target)
-                    threshold = np.percentile(score,
+                    contamination = sum(log_target) / len(log_target)
+                    threshold = np.percentile(log_score,
                                               100 * (1 - contamination))
-                    pred = (score > threshold).long()
-                    f1 = eval_f1(target, pred)
+                    pred = (log_score > threshold).long()
+                    f1 = eval_f1(log_target, pred)
 
                     print(" | Recall {:.4f} | Precision {:.4f} "
                           "| AP {:.4f} | F1 {:.4f}"

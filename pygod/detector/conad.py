@@ -185,7 +185,7 @@ class CONAD(DeepDetector):
                             backbone=self.backbone,
                             **kwargs).to(self.device)
 
-    def forward_model(self, data):
+    def forward_model(self, data, batch_mask=None):
         batch_size = data.batch_size
         node_idx = data.n_id
 
@@ -213,8 +213,17 @@ class CONAD(DeepDetector):
 
         if self.model.training:
             margin_loss = self.margin_loss_func(h, h, h_aug) * label_aug
-            loss = self.eta * torch.mean(score) + \
-                   (1 - self.eta) * torch.mean(margin_loss)
+            # margin_loss covers the whole sampled subgraph, only the
+            # target-node portion aligns with the batch mask
+            margin_target = margin_loss[:batch_size]
+            if batch_mask is not None:
+                # only training seed nodes enter either loss term
+                loss = self.eta * self._masked_mean(score, batch_mask) + \
+                    (1 - self.eta) * \
+                    self._masked_mean(margin_target, batch_mask)
+            else:
+                loss = self.eta * torch.mean(score) + \
+                       (1 - self.eta) * torch.mean(margin_target)
         else:
             loss = torch.mean(score)
 

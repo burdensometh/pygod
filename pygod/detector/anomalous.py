@@ -74,8 +74,12 @@ class ANOMALOUS(Detector):
 
         self.model = None
 
-    def fit(self, data, label=None):
+    def fit(self, data, label=None, train_mask=None):
         data.s = to_dense_adj(data.edge_index)[0]
+        num_nodes = data.x.shape[0]
+        train_mask = self._validate_train_mask(train_mask, num_nodes)
+        self.train_mask_ = None if torch.all(train_mask) else train_mask
+
         x, s, l, w_init, r_init = self.process_graph(data)
 
         self.model = ANOMALOUSBase(w_init, r_init)
@@ -86,18 +90,18 @@ class ANOMALOUS(Detector):
         for epoch in range(self.epoch):
             start_time = time.time()
             x_, r = self.model(x)
-            loss = self._loss(x, x_, r, l)
+            loss = self._masked_loss(x, x_, r, l, train_mask)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            decision_score = torch.sum(torch.pow(r, 2), dim=1).detach() \
-                .cpu()
+            decision_score = torch.sum(torch.pow(r, 2),
+                                       dim=1)[train_mask].detach().cpu()
 
             logger(epoch=epoch,
                    loss=loss.item(),
-                   score=self.decision_score_,
-                   target=label,
+                   score=decision_score,
+                   target=None if label is None else label[train_mask],
                    time=time.time() - start_time,
                    verbose=self.verbose,
                    train=True)
@@ -106,11 +110,11 @@ class ANOMALOUS(Detector):
         self._process_decision_score()
         return self
 
-    def decision_function(self, data, label=None):
+    def decision_function(self, data, label=None, train_mask=None):
         if data is not None:
             warnings.warn("This detector is transductive only. "
                           "Training from scratch with the input data.")
-            self.fit(data, label)
+            self.fit(data, label, train_mask)
         return self.decision_score_
 
     def process_graph(self, data):
@@ -125,6 +129,10 @@ class ANOMALOUS(Detector):
             * torch.eye(x.shape[0]).to(self.device) + self.gamma * laplacian) @ x
 
         return x, s, laplacian, w_init, r_init
+
+    def _masked_loss(self, x, x_, r, l, train_mask):
+        node_term = torch.norm((x - x_ - r)[train_mask], 2)
+        return node_term + self.gamma * torch.trace(r.T @ l @ r)
 
     def _loss(self, x, x_, r, l):
         return torch.norm(x - x_ - r, 2) + \

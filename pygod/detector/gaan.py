@@ -161,7 +161,12 @@ class GAAN(DeepDetector):
                         act=self.act,
                         **kwargs).to(self.device)
 
-    def forward_model(self, data):
+    # GAAN optimizes edge-level adversarial losses rather than
+    # per-node losses, so a node-level training seed mask cannot be
+    # honored; non-default masks are rejected explicitly.
+    _supports_train_mask = False
+
+    def forward_model(self, data, batch_mask=None):
         batch_size = data.batch_size
         node_idx = data.n_id
         x = data.x.to(self.device)

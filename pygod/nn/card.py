@@ -167,7 +167,8 @@ class CARDBase(nn.Module):
 
         return logits.squeeze(), neg_logits.squeeze(), x_, local_x_
 
-    def loss_func(self, logits, diff_logits, x_, local_x_, x, con_label):
+    def loss_func(self, logits, diff_logits, x_, local_x_, x, con_label,
+                  batch_mask=None):
         """
         The loss function proposed in the CARD paper.
         This implementation ignores the KL-loss as it contributes little to the accuracy.
@@ -186,6 +187,10 @@ class CARDBase(nn.Module):
             Input attribute embeddings.
         con_label : torch.Tensor
             Contrastive learning pseudo label
+        batch_mask : torch.Tensor, optional
+            Boolean mask of shape :math:`B` over the batch target nodes
+            restricting every loss term to the training seed nodes.
+            ``None`` means all target nodes contribute.
 
         Returns
         -------
@@ -196,27 +201,53 @@ class CARDBase(nn.Module):
             The anomaly score for each node.
         """
 
-        ori_loss = self.disc_loss_func(logits, con_label)
-        diff_loss = self.disc_loss_func(diff_logits, con_label)
-        logit_loss = (ori_loss + diff_loss) / 2
         batch_size = int(logits.shape[0] / 2)
-        h_1 = normalize(logits[:batch_size], dim=0, p=2)
-        h_2 = normalize(diff_logits[:batch_size], dim=0, p=2)
+        if batch_mask is not None:
+            pair_mask = torch.cat([batch_mask, batch_mask])
+            masked_logits = logits[pair_mask]
+            masked_diff_logits = diff_logits[pair_mask]
+            masked_con_label = con_label[pair_mask]
+        else:
+            masked_logits = logits
+            masked_diff_logits = diff_logits
+            masked_con_label = con_label
+
+        ori_loss = self.disc_loss_func(masked_logits, masked_con_label)
+        diff_loss = self.disc_loss_func(masked_diff_logits,
+                                        masked_con_label)
+        logit_loss = (ori_loss + diff_loss) / 2
+        masked_batch_size = int(masked_logits.shape[0] / 2)
+        h_1 = normalize(masked_logits[:masked_batch_size], dim=0, p=2)
+        h_2 = normalize(masked_diff_logits[:masked_batch_size],
+                        dim=0, p=2)
         inter_logit_loss = 2 - 2 * (h_1 * h_2).sum(dim=-1).mean()
 
         rec_loss = double_recon_loss(x, x_, x, x, 1)
         local_rec_loss = double_recon_loss(x, local_x_, x, x, 1)
-        constra_loss = torch.mean(logit_loss) + \
-            inter_logit_loss + self.gama * torch.mean(local_rec_loss)
+        # reconstruction losses cover the whole sampled subgraph; only
+        # the first ``batch_size`` entries are batch target nodes
+        rec_target = rec_loss[:batch_size]
+        local_rec_target = local_rec_loss[:batch_size]
+        if batch_mask is not None:
+            constra_loss = torch.mean(logit_loss) + inter_logit_loss + \
+                self.gama * torch.mean(local_rec_target[batch_mask])
+            final_loss = (1 - self.fp) * constra_loss + \
+                self.fp * torch.mean(rec_target[batch_mask])
+        else:
+            constra_loss = torch.mean(logit_loss) + inter_logit_loss + \
+                self.gama * torch.mean(local_rec_target)
+            final_loss = (1 - self.fp) * constra_loss + \
+                self.fp * torch.mean(rec_target)  # + 0.5 * kl
 
-        final_loss = (1 - self.fp) * constra_loss + \
-            self.fp * torch.mean(rec_loss)  # + 0.5 * kl
-
+        # scores stay aligned with the full batch of target nodes so
+        # that callers can index them with the same batch mask
         constra_score = ((logits[batch_size:] - logits[:batch_size]) +
-                         (diff_logits[batch_size:] - diff_logits[:batch_size])) / 2
+                         (diff_logits[batch_size:] -
+                          diff_logits[:batch_size])) / 2
 
         score = (1 - self.fp) * (constra_score + self.gama *
-                                 local_rec_loss[:batch_size]) + self.fp * rec_loss[:batch_size]
+                                 local_rec_target) + \
+            self.fp * rec_target
 
         return final_loss, score
 

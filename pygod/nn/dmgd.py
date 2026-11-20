@@ -135,7 +135,7 @@ class DMGDBase(nn.Module):
         nd = self.neigh_diff(self.emb, edge_index).squeeze()
         return x_, nd, self.emb
 
-    def loss_func(self, x, x_, nd, emb):
+    def loss_func(self, x, x_, nd, emb, batch_mask=None):
         """
         Loss function for DMGD.
 
@@ -149,14 +149,21 @@ class DMGDBase(nn.Module):
             Neighbor distance.
         emb : torch.Tensor
             Embeddings.
+        batch_mask : torch.Tensor, optional
+            Boolean mask over the batch target nodes restricting every
+            per-node loss term to the training seed nodes. ``None``
+            means all target nodes contribute.
 
         Returns
         -------
         loss : torch.Tensor
             Loss value.
         """
-        dx = torch.sum(torch.pow(x - x_, 2))
-        loss = self.beta * dx + self.gamma * nd.sum()
+        if batch_mask is None:
+            batch_mask = torch.ones(x.shape[0], dtype=torch.bool)
+
+        dx = torch.sum(torch.pow(x[batch_mask] - x_[batch_mask], 2))
+        loss = self.beta * dx + self.gamma * nd[batch_mask].sum()
 
         if self.warmup > 0:
             self.warmup -= 1
@@ -184,7 +191,7 @@ class DMGDBase(nn.Module):
                                                    2),
                                          1) -
                                torch.pow(self.r[self.cluster], 2))
-            loss += self.alpha * torch.sum(score)
+            loss += self.alpha * torch.sum(score[batch_mask])
 
         return loss, score
 
