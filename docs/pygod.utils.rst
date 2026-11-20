@@ -15,3 +15,10 @@ Score Conversion
 
 .. autofunction:: pygod.utils.to_graph_score
 
+Missing Value Imputation
+------------------------
+
+.. autoclass:: pygod.utils.FeatureImputer
+    :members:
+    :undoc-members:
+

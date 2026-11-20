@@ -16,7 +16,8 @@ def double_recon_loss(x,
                       weight=0.5,
                       pos_weight_a=0.5,
                       pos_weight_s=0.5,
-                      bce_s=False):
+                      bce_s=False,
+                      x_mask=None):
     r"""
     Double reconstruction loss function for feature and structure.
     The loss function is defined as :math:`\alpha \symbf{E_a} +
@@ -29,7 +30,13 @@ def double_recon_loss(x,
     :math:`\symbf{E_a} = \|\symbf{X}-\symbf{X}'\|\odot H`,
     where :math:`H=\begin{cases}1 - \eta &
     \text{if }x_{ij}=0\\ \eta & \text{if }x_{ij}>0\end{cases}`, and
-    :math:`\eta` is the positive weight for feature.
+    :math:`\eta` is the positive weight for feature. When an
+    observation mask ``x_mask`` is given (features contain imputed
+    missing values), only observed dimensions contribute to
+    :math:`\symbf{E_a}`, which is normalized by the number of observed
+    dimensions of each node (root mean squared error over observed
+    dimensions), so imputed values are never treated as real
+    observations.
 
     For structure reconstruction, we use mean squared error loss by
     default: :math:`\symbf{E_s} = \|\symbf{S}-\symbf{S}'\|\odot
@@ -38,7 +45,8 @@ def double_recon_loss(x,
     \end{cases}`, and :math:`\theta` is the positive weight for
     structure. Alternatively, we can use binary cross entropy loss
     for structure reconstruction: :math:`\symbf{E_s} =
-    \text{BCE}(\symbf{S}, \symbf{S}' \odot \Theta)`.
+    \text{BCE}(\symbf{S}, \symbf{S}' \odot \Theta)`. The structure
+    reconstruction loss is never masked.
 
     Parameters
     ----------
@@ -59,6 +67,15 @@ def double_recon_loss(x,
         Positive weight for structure :math:`\theta`. Default: ``0.5``.
     bce_s : bool, optional
         Use binary cross entropy for structure reconstruction loss.
+    x_mask : torch.Tensor, optional
+        Observation mask of the node features with the same shape as
+        ``x``, where ``1`` marks observed and ``0`` marks missing
+        (imputed) entries. When given, the attribute reconstruction
+        loss is computed over observed dimensions only and normalized
+        by the number of observed dimensions per node. Explicit policy
+        for nodes whose features are all missing: they are scored by
+        the structure reconstruction error only. Default: ``None``
+        (no mask, all entries are treated as observed).
 
     Returns
     -------
@@ -74,26 +91,41 @@ def double_recon_loss(x,
     diff_attr = torch.pow(x - x_, 2)
 
     if pos_weight_a != 0.5:
-        diff_attr = torch.where(x > 0, 
-                                diff_attr * pos_weight_a, 
+        diff_attr = torch.where(x > 0,
+                                diff_attr * pos_weight_a,
                                 diff_attr * (1 - pos_weight_a))
 
-    attr_error = torch.sqrt(torch.sum(diff_attr, 1))
+    if x_mask is not None:
+        # only observed dimensions contribute; normalize by the number
+        # of observed dimensions of each node. The epsilon keeps the
+        # gradient of sqrt finite for nodes with no observed dimension
+        # (their squared error sums to exactly 0).
+        n_valid = x_mask.sum(dim=1)
+        diff_attr = diff_attr * x_mask
+        attr_error = torch.sqrt(torch.sum(diff_attr, 1)
+                                / n_valid.clamp(min=1) + 1e-12)
+    else:
+        attr_error = torch.sqrt(torch.sum(diff_attr, 1))
 
-    # structure reconstruction loss
+    # structure reconstruction loss (never masked)
     if bce_s:
         diff_stru = F.binary_cross_entropy(s_, s, reduction='none')
     else:
         diff_stru = torch.pow(s - s_, 2)
 
     if pos_weight_s != 0.5:
-        diff_stru = torch.where(s > 0, 
-                                diff_stru * pos_weight_s, 
+        diff_stru = torch.where(s > 0,
+                                diff_stru * pos_weight_s,
                                 diff_stru * (1 - pos_weight_s))
 
     stru_error = torch.sqrt(torch.sum(diff_stru, 1))
 
     score = weight * attr_error + (1 - weight) * stru_error
+
+    if x_mask is not None:
+        # explicit policy: nodes with no observed feature dimension are
+        # scored by the structure reconstruction error only
+        score = torch.where(n_valid > 0, score, stru_error)
 
     return score
 

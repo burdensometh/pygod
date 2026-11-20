@@ -8,6 +8,7 @@ from torch_geometric.nn import GCN
 
 from .base import DeepDetector
 from ..nn import DOMINANTBase
+from ..utils import FeatureImputer, is_fitted
 
 
 class DOMINANT(DeepDetector):
@@ -21,6 +22,20 @@ class DOMINANT(DeepDetector):
     attribute anomaly score, respectively.
 
     See :cite:`ding2019deep` for details.
+
+    Missing node attributes (``NaN``) are handled natively. During
+    :meth:`fit`, a :class:`pygod.utils.FeatureImputer` is fitted on the
+    training graph only (per-feature mean/std over the observed
+    entries) and stored in ``imputer_``; :meth:`decision_function`
+    reuses the stored statistics without refitting, so validation/test
+    data cannot influence the training statistics. The imputed features
+    are fed to the network together with an observation mask, and the
+    attribute reconstruction loss is computed over the observed
+    dimensions only, normalized by the number of observed dimensions
+    per node -- imputed values are never reconstructed as if they were
+    real observations. Nodes with all attributes missing are scored by
+    the structure reconstruction error only. Structure scores and
+    labels are never masked.
 
     Parameters
     ----------
@@ -93,6 +108,11 @@ class DOMINANT(DeepDetector):
         is ``True``. When the detector has not been fitted, ``emb`` is
         ``None``. When the detector has multiple embeddings,
         ``emb`` is a tuple of torch.Tensor.
+    imputer_ : pygod.utils.FeatureImputer
+        The feature imputation and scaling state fitted on the training
+        graph. It is reused to transform any data passed to
+        :meth:`decision_function`. This value is available once the
+        detector is fitted.
     """
 
     def __init__(self,
@@ -134,6 +154,60 @@ class DOMINANT(DeepDetector):
 
         self.weight = weight
         self.sigmoid_s = sigmoid_s
+        self.imputer_ = None
+
+    def fit(self, data, label=None):
+        """Fit detector with training data.
+
+        The feature imputation and scaling statistics are fitted on
+        the training graph here (and only here); the input graph is not
+        modified.
+
+        Parameters
+        ----------
+        data : torch_geometric.data.Data
+            The training graph. Missing node attributes are encoded as
+            ``NaN``.
+        label : torch.Tensor, optional
+            The optional outlier ground truth labels used to monitor
+            the training progress. They are not used to optimize the
+            unsupervised model. Default: ``None``.
+
+        Returns
+        -------
+        self : object
+            Fitted detector.
+        """
+        self.imputer_ = FeatureImputer()
+        data = data.clone()
+        data.x, data.x_mask = self.imputer_.fit_transform(data.x)
+        return super().fit(data, label)
+
+    def decision_function(self, data, label=None):
+        """Predict raw outlier scores of testing data using the fitted
+        detector. Outliers are assigned with higher outlier scores.
+
+        The imputation and scaling statistics fitted on the training
+        graph are reused as-is; the testing data does not update them.
+
+        Parameters
+        ----------
+        data : torch_geometric.data.Data
+            The testing graph. Missing node attributes are encoded as
+            ``NaN``.
+        label : torch.Tensor, optional
+            The optional outlier ground truth labels used for testing.
+            Default: ``None``.
+
+        Returns
+        -------
+        score : torch.Tensor
+            The outlier scores of shape :math:`N`.
+        """
+        is_fitted(self, ['imputer_'])
+        data = data.clone()
+        data.x, data.x_mask = self.imputer_.transform(data.x)
+        return super().decision_function(data, label)
 
     def process_graph(self, data):
         DOMINANTBase.process_graph(data)
@@ -155,6 +229,7 @@ class DOMINANT(DeepDetector):
         node_idx = data.n_id
 
         x = data.x.to(self.device)
+        x_mask = data.x_mask.to(self.device)
         s = data.s.to(self.device)
         edge_index = data.edge_index.to(self.device)
 
@@ -164,7 +239,8 @@ class DOMINANT(DeepDetector):
                                      x_[:batch_size],
                                      s[:batch_size, node_idx],
                                      s_[:batch_size],
-                                     self.weight)
+                                     self.weight,
+                                     x_mask=x_mask[:batch_size])
 
         loss = torch.mean(score)
 
